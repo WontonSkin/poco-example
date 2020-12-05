@@ -14,4 +14,7 @@
 #include "JSONTestSuite.h"
 
 
+//执行方式:      ./JSON-testrunner -all
 CppUnitMain(JSONTestSuite)
+
+
