@@ -22,10 +22,10 @@ CppUnit::Test* UtilTestSuite::suite()
 	CppUnit::TestSuite* pSuite = new CppUnit::TestSuite("UtilTestSuite");
 
 	pSuite->addTest(ConfigurationTestSuite::suite());
-	pSuite->addTest(OptionsTestSuite::suite());
-	pSuite->addTest(TimerTestSuite::suite());
+	//pSuite->addTest(OptionsTestSuite::suite());
+	//pSuite->addTest(TimerTestSuite::suite());
 #if defined(_MSC_VER) && !defined(_WIN32_WCE)
-	pSuite->addTest(WindowsTestSuite::suite());
+	//pSuite->addTest(WindowsTestSuite::suite());
 #endif
 
 	return pSuite;

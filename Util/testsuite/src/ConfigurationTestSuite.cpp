@@ -38,6 +38,7 @@ CppUnit::Test* ConfigurationTestSuite::suite()
 	pSuite->addTest(FilesystemConfigurationTest::suite());
 	pSuite->addTest(LoggingConfiguratorTest::suite());
 	pSuite->addTest(JSONConfigurationTest::suite());
+	
 
 	return pSuite;
 }
