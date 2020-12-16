@@ -21,7 +21,8 @@
     }
 
     //新建一个websocket
-    var websocket = new WebSocket("ws://192.168.142.129:9980");
+    //var websocket = new WebSocket("ws://192.168.142.129:9980");
+    var websocket = new WebSocket("ws://127.0.0.1:9980");
     //打开websocket连接
     websocket.onopen = function () {
         console.log("已经连上服务器----");
