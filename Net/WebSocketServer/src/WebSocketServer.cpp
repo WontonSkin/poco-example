@@ -22,7 +22,7 @@
 #include "Poco/Net/HTTPRequestHandler.h"
 #include "Poco/Net/HTTPRequestHandlerFactory.h"
 #include "Poco/Net/NetException.h"
-#include "Poco/Util/Application.h"
+#include "Poco/Util/JSONConfiguration.h"
 #include "Poco/Format.h"
 #include "Poco/NumberParser.h"
 #include "Poco/Logger.h"
@@ -36,9 +36,8 @@
 #include <iostream>
 #include <map>
 
-
+using namespace std;
 using namespace Poco::Net;
-using Poco::Util::Application;
 using Poco::UInt16;
 using Poco::NumberParser;
 using Poco::Logger;
@@ -50,6 +49,84 @@ using Poco::Exception;
 using Poco::FastMutex;
 using Poco::Timestamp;
 using Poco::ThreadPool;
+using Poco::AutoPtr;
+using Poco::Util::JSONConfiguration;
+
+
+
+//ClientManager
+class WSClientManager
+{
+public:
+	WSClientManager():m_userNum(0)
+	{
+	}
+	
+	// add
+	void add(std::string name, WebSocket* s)
+	{
+		FastMutex::ScopedLock lock(m_mutex);
+		
+		auto search = m_user.find(name);
+	    if (search != m_user.end()) {
+	        std::cout << "Found " << search->first << '\n';
+			std::cout << "some wrong happen.\n";
+			return;
+	    }
+		
+		m_user[name] = s;
+		return;
+	}
+	
+	// del
+	void del(std::string name)
+	{
+		FastMutex::ScopedLock lock(m_mutex);
+
+		auto search = m_user.find(name);
+	    if (search == m_user.end()) {
+	        std::cout << name << " not Found " << ", some wrong? \n";
+			return;
+	    }
+
+		std::cout << "delete " << name << " success." << std::endl;
+		m_user.erase(name);
+		
+		return;
+	}
+	
+	// sendAll
+	int sendToAllUser(char* buf, int len)
+	{
+		FastMutex::ScopedLock lock(m_mutex);
+
+		for (auto& i : m_user) {
+			i.second->sendFrame(buf, len);
+		}
+		
+		return 0;
+	}
+	
+	// get name
+	std::string getName()
+	{
+		FastMutex::ScopedLock lock(m_mutex);
+		m_userNum++;
+		std::string name("user");
+		name = name + std::to_string(m_userNum);
+
+		//std::cout << "getName: " << name << std::endl;
+		return name;
+	}
+private:
+	FastMutex m_mutex;
+	std::map<std::string, WebSocket*> m_user;
+	int m_userNum;
+};
+
+
+WSClientManager* gpCliMng = new WSClientManager;
+
 
 
 class PageRequestHandler: public HTTPRequestHandler
@@ -106,28 +183,82 @@ class WebSocketRequestHandler: public HTTPRequestHandler
 	/// Handle a WebSocket connection.
 {
 public:
+
+	void doSomethings(WebSocket& ws, const HTTPServerParams& param)
+	{
+		AutoPtr<JSONConfiguration> pConf = new JSONConfiguration;
+	
+		// generate name
+		m_name = gpCliMng->getName();
+		// add one user
+		gpCliMng->add(m_name, &ws);
+		
+		// join in room
+		std::string sayAddStr(m_name + " join in room.");
+		pConf->setString("type", "enter");
+		pConf->setString("data", sayAddStr);
+		ostringstream ossSayAddStr;
+		pConf->save(ossSayAddStr, 0);
+		gpCliMng->sendToAllUser(const_cast<char*>(ossSayAddStr.str().c_str()), ossSayAddStr.str().size());
+		
+		//say somethings
+		while (true) {
+			if (ws.poll(param.getKeepAliveTimeout(), Socket::SELECT_READ)) {
+				try 
+				{
+					char buffer[1024] = {0};
+					int flags;
+					int n = ws.receiveFrame(buffer, sizeof(buffer), flags);
+					cout << Poco::format("Frame received (length=%d, flags=0x%x).", n, unsigned(flags)) << endl;
+					if (n <= 0 || ((flags & WebSocket::FRAME_OP_BITMASK) == WebSocket::FRAME_OP_CLOSE)) {
+						std::cout << m_name << " errno: " << n << "<= 0." << std::endl;
+						break;
+					}
+
+					std::string saySomeStr(m_name + " say: " + buffer);
+					pConf->setString("type", "message");
+					pConf->setString("data", saySomeStr);
+					ostringstream ossSaySomeStr;
+					pConf->save(ossSaySomeStr, 0);
+					gpCliMng->sendToAllUser(const_cast<char*>(ossSaySomeStr.str().c_str()), ossSaySomeStr.str().size());
+				} catch (Poco::Exception& exc){
+					std::cout << m_name  << " Exception: " << exc.displayText() << std::endl;
+					break;
+				} catch (...) {
+					std::cout <<  m_name  << " some err." << std::endl;
+					break;
+				}
+			}
+		}
+
+		cout << m_name <<" left room.\n";
+
+		// left room
+		std::string sayLeftStr(m_name + " left room.");
+		pConf->setString("type", "leave");
+		pConf->setString("data", sayLeftStr);
+		ostringstream ossLeftStr;
+		pConf->save(ossLeftStr, 0);
+		gpCliMng->del(m_name);
+		gpCliMng->sendToAllUser(const_cast<char*>(ossLeftStr.str().c_str()), ossLeftStr.str().size());
+
+		return;
+	}
+
 	void handleRequest(HTTPServerRequest& request, HTTPServerResponse& response)
 	{
-		Application& app = Application::instance();
+					
 		try
-		{
+		{	
+			const HTTPServerParams& param = request.serverParams();
 			WebSocket ws(request, response);
-			app.logger().information("WebSocket connection established.");
-			char buffer[1024];
-			int flags;
-			int n;
-			do
-			{
-				n = ws.receiveFrame(buffer, sizeof(buffer), flags);
-				app.logger().information(Poco::format("Frame received (length=%d, flags=0x%x).", n, unsigned(flags)));
-				ws.sendFrame(buffer, n, flags);
-			}
-			while (n > 0 && (flags & WebSocket::FRAME_OP_BITMASK) != WebSocket::FRAME_OP_CLOSE);
-			app.logger().information("WebSocket connection closed.");
+			cout<< "WebSocket connection established.\n";
+			doSomethings(ws, param);
+			cout << "WebSocket connection closed.\n";
 		}
-		catch (WebSocketException& exc)
+		catch (Exception& exc)
 		{
-			app.logger().log(exc);
+			cout << exc.displayText() <<endl;
 			switch (exc.code())
 			{
 			case WebSocket::WS_ERR_HANDSHAKE_UNSUPPORTED_VERSION:
@@ -142,7 +273,13 @@ public:
 				break;
 			}
 		}
+		catch (...) {
+			cout << "some unknow exception happen.\n";
+		}
 	}
+
+private:
+	string m_name;
 };
 
 
@@ -151,19 +288,18 @@ class RequestHandlerFactory: public HTTPRequestHandlerFactory
 public:
 	HTTPRequestHandler* createRequestHandler(const HTTPServerRequest& request)
 	{
-		Application& app = Application::instance();
-		app.logger().information("Request from " 
+		cout << "Request from " 
 			+ request.clientAddress().toString()
 			+ ": "
 			+ request.getMethod()
 			+ " "
 			+ request.getURI()
 			+ " "
-			+ request.getVersion());
+			+ request.getVersion() << endl;
 			
 		for (HTTPServerRequest::ConstIterator it = request.begin(); it != request.end(); ++it)
 		{
-			app.logger().information(it->first + ": " + it->second);
+			cout << it->first + ": " + it->second << endl;
 		}
 		
 		if(request.find("Upgrade") != request.end() && Poco::icompare(request["Upgrade"], "websocket") == 0)
@@ -172,85 +308,6 @@ public:
 			return new PageRequestHandler;
 	}
 };
-
-
-
-
-
-
-
-//ClientManager
-class ClientManager
-{
-public:
-	ClientManager():m_userNum(0)
-	{
-	}
-	
-	// add
-	void add(std::string name, StreamSocket* s)
-	{
-		FastMutex::ScopedLock lock(m_mutex);
-		
-		auto search = m_user.find(name);
-	    if (search != m_user.end()) {
-	        std::cout << "Found " << search->first << '\n';
-			std::cout << "some wrong happen.\n";
-			return;
-	    }
-		
-		m_user[name] = s;
-		return;
-	}
-	
-	// del
-	void del(std::string name)
-	{
-		FastMutex::ScopedLock lock(m_mutex);
-
-		auto search = m_user.find(name);
-	    if (search == m_user.end()) {
-	        std::cout << name << " not Found " << ", some wrong? \n";
-			return;
-	    }
-
-		std::cout << "delete " << name << " success." << std::endl;
-		m_user.erase(name);
-		
-		return;
-	}
-	
-	// sendAll
-	int sendToAllUser(char* buf, int len)
-	{
-		FastMutex::ScopedLock lock(m_mutex);
-
-		for (auto& i : m_user) {
-			i.second->sendBytes(buf, len);
-		}
-		
-		return 0;
-	}
-	
-	// get name
-	std::string getName()
-	{
-		FastMutex::ScopedLock lock(m_mutex);
-		m_userNum++;
-		std::string name("user");
-		name = name + std::to_string(m_userNum);
-
-		//std::cout << "getName: " << name << std::endl;
-		return name;
-	}
-private:
-	FastMutex m_mutex;
-	std::map<std::string, StreamSocket*> m_user;
-	int m_userNum;
-};
-
-
-ClientManager* gpCliMng = new ClientManager;
 
 
 class ClientConnection: public TCPServerConnection
@@ -327,49 +384,6 @@ public:
 				else throw;
 			}
 		}
-	}
-
-	void run_bak()
-	{
-		StreamSocket& ss = socket();
-
-		// generate name
-		m_name = gpCliMng->getName();
-		// add one user
-		gpCliMng->add(m_name, &ss);
-		// join in room
-		std::string sayAddStr(m_name + " join in room.");
-		gpCliMng->sendToAllUser(const_cast<char*>(sayAddStr.c_str()), sayAddStr.size());
-		
-		//say somethings
-		Poco::Timespan span(250000);
-		while (true) {
-			if (ss.poll(span, Socket::SELECT_READ)) {
-				try {
-					char buffer[256];
-					int n = ss.receiveBytes(buffer, sizeof(buffer));
-					if (n <= 0) {
-						std::cout << m_name << " errno: " << n << "<= 0." << std::endl;
-						break;
-					}
-
-					std::string saySomeStr(m_name + " say: " + buffer);
-					gpCliMng->sendToAllUser(const_cast<char*>(saySomeStr.c_str()), saySomeStr.size());
-				} catch (Poco::Exception& exc) {
-					std::cout << m_name  << " Exception: " << exc.displayText() << std::endl;
-					break;
-				} catch (...) {
-					std::cout <<  m_name  << " some err." << std::endl;
-					break;
-				}
-			}
-		}
-
-		// left room
-		std::string sayLeftStr(m_name + " left room.");
-		gpCliMng->del(m_name);
-		gpCliMng->sendToAllUser(const_cast<char*>(sayLeftStr.c_str()), sayLeftStr.size());
-		
 	}
 
 private:
